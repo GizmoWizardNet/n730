@@ -721,6 +721,24 @@ class Tokenizer:
         self.eos = self.tok.eos_token_id
         print(f"  Tokenizer: vocab={self.tok.vocab_size} eos={self.eos}")
     def encode(self, t): return np.array(self.tok.encode(t), dtype=np.int32)
+    def encode_chat(self, prompt):
+        """Encode a user turn for instruction-tuned checkpoints when possible."""
+        if getattr(self.tok, "chat_template", None):
+            ids = self.tok.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            # Transformers versions differ: some return a token list while
+            # newer releases return a BatchEncoding mapping.
+            if hasattr(ids, "get") and ids.get("input_ids") is not None:
+                ids = ids["input_ids"]
+            if hasattr(ids, "tolist"):
+                ids = ids.tolist()
+            if ids and isinstance(ids[0], (list, tuple)):
+                ids = ids[0]
+            return np.asarray(ids, dtype=np.int32)
+        return self.encode(prompt)
     def decode(self, ids): return self.tok.decode(list(ids), skip_special_tokens=False)
 
 
@@ -740,7 +758,7 @@ class N730Generator:
 
     def generate(self, prompt, max_tokens=200, temp=0.7, top_p=0.9):
         self.transformer.kv.clear()
-        ids = self.tok.encode(prompt)
+        ids = self.tok.encode_chat(prompt)
         print(f"\n  You: {prompt}")
         print(f"  N730: ", end="", flush=True)
         generated = []
