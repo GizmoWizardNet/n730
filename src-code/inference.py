@@ -1,19 +1,4 @@
 """
-N730 CUDA Inference Engine
-===========================
-
-Python orchestrates. CUDA does everything hot.
-
-Architecture:
-  CPU:  tokenize → embed lookup → schedule layers → sample logits
-  GPU:  ALL matmuls, norms, activations, attention, MLP
-
-The GT 730 runs the transformer. CPU never touches a weight matrix.
-
-Build the CUDA kernel first:
-  nvcc -O3 -arch=sm_35 --shared -lcublas -o n730_cuda.dll n730_cuda.cu
-  (Linux: replace .dll with .so, add -Xcompiler -fPIC)
-
 Usage:
   python inference.py --model deepseek-r1-1.5b.n730 \
     --hf-model path/to/model --interactive
