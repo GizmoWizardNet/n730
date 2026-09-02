@@ -4,3 +4,5 @@ __pycache__
 *.exp
 *.lib
 *.obj
+.n730_setup_state.json
+/hf-cache
