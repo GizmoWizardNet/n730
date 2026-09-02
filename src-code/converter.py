@@ -1,4 +1,6 @@
 """
+convert to a custom n730 binary
+
 File layout:
   [MAGIC 8b][VERSION 4b][HEADER_SIZE 4b][JSON_HEADER Nb][PADDING to 4KB]
   [LAYER_0_DATA][PADDING to 4KB]
@@ -27,9 +29,6 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass
 
-
-# ─── Constants ────────────────────────────────────────────────────────────────
-
 MAGIC         = b"N730\x00\x01\x00\x00"   # 8 bytes: file magic
 LAYER_MAGIC   = b"LYR\x00"                 # 4 bytes: layer block magic
 FORMAT_VERSION = 1
@@ -37,9 +36,6 @@ PAGE_SIZE     = 4096                        # 4KB alignment for DMA
 
 PRECISION_BITS = {"INT2": 2, "INT4": 4, "INT8": 8, "FP16": 16}
 PRECISION_ID   = {"INT2": 2, "INT4": 4, "INT8": 8, "FP16": 16}
-
-
-# ─── Quantization ─────────────────────────────────────────────────────────────
 
 def quantize_int8(weights: np.ndarray) -> tuple[bytes, float, float]:
     """Symmetric INT8: scale to [-127, 127], pack as uint8 with offset 128."""
@@ -125,9 +121,6 @@ QUANTIZERS = {
     "FP16": quantize_fp16,
 }
 
-
-# ─── Layer block serialization ────────────────────────────────────────────────
-
 def pad_to_page(data: bytes) -> bytes:
     """Pad bytes to the next 4KB boundary."""
     remainder = len(data) % PAGE_SIZE
@@ -142,14 +135,7 @@ def serialize_layer(
     weights: np.ndarray,
     layer_name: str,
 ) -> tuple[bytes, dict]:
-    """
-    Pack one layer into a binary block + return its metadata for the seek table.
 
-    Block layout:
-      LAYER_MAGIC (4b) | layer_idx (4b) | precision_id (1b) |
-      rows (4b) | cols (4b) | scale (f32) | zero_point (f32) |
-      data_size (4b) | quantized_data (Nb)
-    """
     shape = weights.shape
     rows = shape[0]
     cols = shape[1] if len(shape) > 1 else 1
@@ -189,9 +175,6 @@ def serialize_layer(
 
     return block_padded, metadata
 
-
-# ─── Main converter ───────────────────────────────────────────────────────────
-
 def convert(
     weight_layers: list,           # list of (name, np.ndarray)
     sensitivity_map: dict,
@@ -220,9 +203,6 @@ def convert(
 
     for idx, (name, weights) in enumerate(weight_layers):
         if weights.ndim == 1:
-            # Bias vectors: small, added (not matmul'd), and usually absent
-            # from the sensitivity map since the profiler only scores 2D
-            # weight matrices. Always store these at full FP16, never INT4.
             precision = "FP16"
         else:
             precision = precision_lookup.get(name, "INT4")
@@ -248,8 +228,6 @@ def convert(
 
     elapsed = time.time() - t0
 
-    # ── Assemble file ──────────────────────────────────────────────────────────
-
     file_header = {
         "format": "N730",
         "version": FORMAT_VERSION,
@@ -266,18 +244,11 @@ def convert(
 
     header_json = json.dumps(file_header, indent=2).encode("utf-8")
     header_size = len(header_json)
-
-    # Fixed-size file preamble: MAGIC + VERSION + HEADER_SIZE
     preamble = MAGIC + struct.pack(">II", FORMAT_VERSION, header_size)
     preamble_padded = pad_to_page(preamble + header_json)
-
-    # Update seek table offsets: they were relative to data section start;
-    # now make them absolute (preamble size + offset)
     data_start = len(preamble_padded)
     for entry in file_header["seek_table"]:
         entry["file_offset"] += data_start
-
-    # Re-encode header with corrected absolute offsets
     header_json = json.dumps(file_header, indent=2).encode("utf-8")
     header_size = len(header_json)
     preamble = MAGIC + struct.pack(">II", FORMAT_VERSION, header_size)
@@ -307,9 +278,6 @@ def convert(
     print("═" * 60)
 
     return file_header
-
-
-# ─── .n730 file reader / inspector ───────────────────────────────────────────
 
 def inspect_n730(path: Path):
     """Read and print the header of a .n730 file. Useful for debugging."""
@@ -406,15 +374,7 @@ def read_layer(path: Path, layer_idx: int, header: dict = None) -> np.ndarray:
 
     return weights.reshape(rows, cols)
 
-
-# ─── Synthetic weight generator (mirrors profiler's synthetic mode) ───────────
-
 def generate_synthetic_weights(sensitivity_map: dict) -> list:
-    """
-    Generate fake weights matching shapes implied by the sensitivity map.
-    Caps individual tensors at 1M params to keep memory sane in test mode.
-    The converter logic is identical regardless of tensor size.
-    """
     layers = []
     rng = np.random.default_rng(42)
     MAX_PARAMS = 1_000_000  # cap per layer for synthetic mode
@@ -426,9 +386,6 @@ def generate_synthetic_weights(sensitivity_map: dict) -> list:
         w = rng.normal(0, std, (rows, cols)).astype(np.float32)
         layers.append((profile["layer_name"], w))
     return layers
-
-
-# ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -444,10 +401,9 @@ def main():
     args = parser.parse_args()
 
     print("\n╔══════════════════════════════════════╗")
-    print("║  N730 Converter                       ║")
+    print("║  Converter stage to get .n730 binary   ║")
     print("╚══════════════════════════════════════╝")
 
-    # ── Inspect mode ──────────────────────────────────────────────────────────
     if args.inspect:
         inspect_n730(Path(args.inspect))
         if args.read_layer is not None:
@@ -458,15 +414,12 @@ def main():
             print(f"  Std:   {weights.std():.6f}")
             print(f"  Min:   {weights.min():.6f}  Max: {weights.max():.6f}")
         return
-
-    # ── Load sensitivity map ───────────────────────────────────────────────────
     with open(args.sensitivity) as f:
         sensitivity_map = json.load(f)
     print(f"\n  Sensitivity map : {args.sensitivity}")
     print(f"  Model           : {sensitivity_map['model_id']}")
     print(f"  Layers          : {sensitivity_map['total_layers']}")
 
-    # ── Load weights ───────────────────────────────────────────────────────────
     if args.synthetic:
         print("\n  Mode: SYNTHETIC weights")
         weight_layers = generate_synthetic_weights(sensitivity_map)
@@ -490,7 +443,6 @@ def main():
         print("\n  No model specified — using synthetic weights from sensitivity map.")
         weight_layers = generate_synthetic_weights(sensitivity_map)
 
-    # ── Convert ────────────────────────────────────────────────────────────────
     output_path = Path(args.output)
     convert(weight_layers, sensitivity_map, output_path, verbose=not args.quiet)
 

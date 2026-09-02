@@ -1,22 +1,4 @@
 /*
- * n730core.cpp — N730 Core Engine
- * =================================
- * Project Bombakla — Phase 3b
- *
- * The fast inner loop of the N730 stack.
- * All the hot paths that Python/numpy was doing slowly:
- *
- *   - INT2/INT4/INT8 dequantization with manual SIMD-friendly loops
- *   - Persistent file handle with single open() per model
- *   - Direct layer reads via seek table (O(1) access)
- *   - Zero-copy output into caller-provided buffers
- *
- * Compiled as a shared library (.dll on Windows, .so on Linux/Mac).
- * Called from Python via ctypes.
- *
- * Build (Linux/Mac):
- *   g++ -O3 -march=native -shared -fPIC -o n730core.so n730core.cpp
- *
  * Build (Windows, MSVC):
  *   cl /O2 /arch:AVX2 /LD n730core.cpp /Fe:n730core.dll
  *
@@ -30,27 +12,21 @@
 #include <cstdio>
 #include <cmath>
 
-// Windows DLL export / Linux visibility
 #ifdef _WIN32
   #define N730_API extern "C" __declspec(dllexport)
 #else
   #define N730_API extern "C" __attribute__((visibility("default")))
 #endif
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 static const uint8_t  FILE_MAGIC[8]  = {'N','7','3','0',0,1,0,0};
 static const uint8_t  LAYER_MAGIC[4] = {'L','Y','R',0};
 static const uint32_t PAGE_SIZE      = 4096;
 
-// Precision IDs matching Python converter
+
 static const int PREC_INT2 = 2;
 static const int PREC_INT4 = 4;
 static const int PREC_INT8 = 8;
 static const int PREC_FP16 = 16;
-
-// ─── Error codes ─────────────────────────────────────────────────────────────
-
 static const int N730_OK              =  0;
 static const int N730_ERR_BAD_MAGIC   = -1;
 static const int N730_ERR_FILE        = -2;
@@ -58,9 +34,6 @@ static const int N730_ERR_ALLOC       = -3;
 static const int N730_ERR_BAD_LAYER   = -4;
 static const int N730_ERR_BAD_PREC    = -5;
 static const int N730_ERR_NULL        = -6;
-
-
-// ─── Byte-swap helpers (file is big-endian) ───────────────────────────────────
 
 static inline uint32_t bswap32(uint32_t x) {
     return ((x & 0xFF000000u) >> 24) |
@@ -89,17 +62,6 @@ static inline float read_be_float(FILE* f) {
     return bswap_float(v);
 }
 
-
-// ─── Dequantization — the hot paths ──────────────────────────────────────────
-//
-// These replace the slow numpy bit-unpacking loops.
-// Written to auto-vectorize with -O3 -march=native (GCC/Clang will SIMD these).
-
-/*
- * INT8 → float32
- * Stored as uint8 with zero_point offset. Simple scale+shift.
- * Fastest path — compiler will AVX2 vectorize the inner loop.
- */
 static void dequant_int8(
     const uint8_t* __restrict src,
     float*         __restrict dst,
@@ -112,11 +74,6 @@ static void dequant_int8(
     }
 }
 
-/*
- * INT4 → float32
- * Two values per byte: low nibble first, high nibble second.
- * We process 2 outputs per byte.
- */
 static void dequant_int4(
     const uint8_t* __restrict src,
     float*         __restrict dst,
@@ -135,11 +92,6 @@ static void dequant_int4(
     }
 }
 
-/*
- * INT2 → float32
- * Four 2-bit values per byte, packed LSB-first.
- * Most aggressive quantization — but only used on low-sensitivity layers.
- */
 static void dequant_int2(
     const uint8_t* __restrict src,
     float*         __restrict dst,
@@ -158,11 +110,6 @@ static void dequant_int2(
     }
 }
 
-/*
- * FP16 → float32
- * Manual conversion since we can't assume __fp16 support everywhere.
- * On AVX512-FP16 hardware the compiler may use native intrinsics.
- */
 static float fp16_to_float(uint16_t h) {
     uint32_t sign     = (h & 0x8000u) << 16;
     uint32_t exponent = (h & 0x7C00u) >> 10;
@@ -202,9 +149,6 @@ static void dequant_fp16(
     }
 }
 
-
-// ─── Layer block header (matches Python converter struct) ─────────────────────
-
 #pragma pack(push, 1)
 struct LayerBlockHeader {
     uint8_t  magic[4];
@@ -218,15 +162,11 @@ struct LayerBlockHeader {
 };
 #pragma pack(pop)
 
-
-// ─── File handle state ────────────────────────────────────────────────────────
-
 struct N730File {
     FILE*    fp;
-    int64_t  data_start_offset;  // byte offset where layer data begins
+    int64_t  data_start_offset;
 };
 
-// We expose an opaque handle (pointer cast to int64) to Python
 N730_API int64_t n730_open(const char* path) {
     N730File* state = (N730File*)malloc(sizeof(N730File));
     if (!state) return (int64_t)N730_ERR_ALLOC;
@@ -245,7 +185,7 @@ N730_API int64_t n730_open(const char* path) {
         return (int64_t)N730_ERR_BAD_MAGIC;
     }
 
-    state->data_start_offset = 0;  // seek table has absolute offsets
+    state->data_start_offset = 0;
     return (int64_t)(uintptr_t)state;
 }
 
@@ -257,18 +197,6 @@ N730_API void n730_close(int64_t handle) {
     }
 }
 
-
-// ─── Core read + dequantize function ─────────────────────────────────────────
-/*
- * n730_read_layer
- *
- * Seeks to file_offset, reads the layer block header + raw bytes,
- * dequantizes directly into out_buffer (caller-allocated float32 array).
- *
- * Returns N730_OK on success, negative error code on failure.
- *
- * This is the function that replaces 74ms Python dequant with ~1ms C++.
- */
 N730_API int32_t n730_read_layer(
     int64_t  handle,
     int64_t  file_offset,    // absolute byte offset from seek table
@@ -327,8 +255,6 @@ N730_API int32_t n730_read_layer(
     return N730_OK;
 }
 
-
-// ─── Utility: get max elements in any layer (for buffer pre-allocation) ───────
 N730_API int32_t n730_probe_layer_size(
     int64_t handle,
     int64_t file_offset
@@ -351,7 +277,6 @@ N730_API int32_t n730_probe_layer_size(
     return (int32_t)(rows * cols);
 }
 
-// Cleaner probe: just tell me rows*cols for a layer
 N730_API int32_t n730_layer_elements(int64_t handle, int64_t file_offset) {
     if (!handle) return N730_ERR_NULL;
     N730File* state = (N730File*)(uintptr_t)handle;
@@ -365,8 +290,6 @@ N730_API int32_t n730_layer_elements(int64_t handle, int64_t file_offset) {
     return (int32_t)(rows * cols);
 }
 
-
-// ─── Version string ───────────────────────────────────────────────────────────
 N730_API const char* n730_version() {
-    return "N730Core 0.1.0 / Project Bombakla";
+    return "N730Core version whatever";
 }

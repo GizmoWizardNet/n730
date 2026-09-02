@@ -1,12 +1,4 @@
 """
-N730 Precision Profiler
-=======================
-
-Scores every layer in a transformer model for sensitivity to quantization.
-Critical layers keep higher precision (INT8), safe layers get crushed (INT2/INT4).
-
-essentially useless for anything else
-
 Usage:
     python profiler.py --model <path_or_hf_id> --output sensitivity_map.json
     python profiler.py --synthetic --layers 32 --output sensitivity_map.json
@@ -20,9 +12,6 @@ import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Optional
 from pathlib import Path
-
-
-# ─── Data structures ──────────────────────────────────────────────────────────
 
 PRECISION_LEVELS = {
     "INT2": 2,
@@ -58,19 +47,7 @@ class SensitivityMap:
     profiler_version: str = "0.1.0"
     project: str = "N730"
 
-
-# ─── Core scoring logic ───────────────────────────────────────────────────────
-
 def compute_sensitivity(weights: np.ndarray, layer_idx: int, total_layers: int) -> float:
-    """
-    Assigns a sensitivity score 0→1 to a weight tensor.
-
-    Three signals combined:
-      1. Outlier ratio  — layers with extreme weights are harder to quantize
-      2. Kurtosis       — spiky distributions lose more info when rounded
-      3. Position bias  — first and last ~15% of layers are empirically more critical
-                          (embeddings and final projection matter most)
-    """
     # Always float64 — large tensors (lm_head, embed_tokens) overflow float32 arithmetic
     flat = weights.flatten().astype(np.float64)
 
@@ -113,20 +90,6 @@ def compute_sensitivity(weights: np.ndarray, layer_idx: int, total_layers: int) 
 
 
 def assign_precision(sensitivity: float, layer_name: str = "") -> str:
-    """
-    INT8 floor for all layers.
-
-    Why: this implementation uses per-tensor quantization (one scale/zp per matrix).
-    Per-tensor INT4 has ~5-10x higher error than group-INT4 (e.g. llama.cpp Q4_0),
-    making it too lossy for a 1.5B model where every parameter counts.
-    22 of 28 layers were falling to INT4 and compounding error fatally.
-
-    Per-tensor INT8 gives <0.5% weight error and fits easily in 2GB VRAM because
-    only one weight matrix is resident at a time (streamed). Peak usage ~88 MB.
-
-    To safely use INT4 in the future: add group quantization (group_size=128)
-    so each group gets its own scale — that matches llama.cpp Q4_0 quality.
-    """
     return "INT8"
 
 
@@ -177,9 +140,6 @@ def profile_weight_tensor(
         compression_ratio=round(compression, 2),
     )
 
-
-# ─── Synthetic model generator (for testing without downloading a model) ──────
-
 def generate_synthetic_layers(num_layers: int, hidden_size: int = 4096):
     """
     Generates weight tensors that realistically mimic a transformer:
@@ -211,14 +171,7 @@ def generate_synthetic_layers(num_layers: int, hidden_size: int = 4096):
 
     return layers
 
-
-# ─── Real model loader ────────────────────────────────────────────────────────
-
 def load_model_layers(model_path: str):
-    """
-    Loads weight tensors from a HuggingFace model (local path or hub ID).
-    Yields (name, numpy_array) for each linear layer weight.
-    """
     try:
         from transformers import AutoModelForCausalLM
         import torch
@@ -239,9 +192,6 @@ def load_model_layers(model_path: str):
             layers.append((name, param.detach().numpy()))
 
     return layers
-
-
-# ─── Main profiler ────────────────────────────────────────────────────────────
 
 def run_profiler(
     model_id: str,

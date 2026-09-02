@@ -1,7 +1,3 @@
-"""
-N730 Layer-0 Full Diagnostic
-Tests attention block (existing) + MLP block (new) + full layer output.
-"""
 import argparse, ctypes, math, os, struct, sys
 import numpy as np
 from pathlib import Path
@@ -278,7 +274,6 @@ def main():
         resid1_ref  = (x_ref + o_ref).astype(np.float32)
         all_ok &= compare(f"L{layer_i} resid1", resid1_cuda, resid1_ref)
 
-        # ── MLP block ────────────────────────────────────────────────────────
         print(f"  MLP block:")
         norm2_w = sd[f"{pfx}.post_attention_layernorm.weight"]
         norm2   = rms_norm_numpy(resid1_ref, norm2_w, cfg.rms_norm_eps)

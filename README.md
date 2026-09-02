@@ -19,74 +19,9 @@
 
 # What is N730?
 
-N730 is an experimental AI inference runtime built to run modern
-Large Language Models on extremely low-end hardware such as the
-NVIDIA GT 730.
+This stuff is built to run AI LLMs locally using streamed quantization on a GT 730(a Kepler-era card). It supports Qwen-like LLMs right now and uses HuggingFace as its model provider.
 
-Instead of loading an entire model into VRAM at once, N730 streams
-quantized transformer layers dynamically during inference, allowing
-models far larger than GPU memory capacity to run on legacy hardware.
-
----
----
-
-## Features
-
-- Layer streaming runtime
-- Dynamic mixed precision quantization
-- Native AVX2/C++ backend
-- CUDA acceleration for Kepler GPUs
-- Runtime dequantization
-- KV cache autoregressive inference
-- HuggingFace conversion pipeline
-
----
----
-
-## Status
-<h2>WIP</h2>
- <p align="left">
-  <img src="git-assets/screen0.png">
-</p>
-
- <p align="right">
-  <img src="git-assets/screen1.png">
-</p>
-
----
-
-## Capabilities
-
-- Converting HuggingFace transformer models into the `.n730` format
-- Streaming 198+ transformer layers from disk in real time
-- Running autoregressive transformer inference
-- Dynamically dequantizing INT2 / INT4 / INT8 / FP16 weights
-- Executing inference on hardware as old as the GT 730
-
-## Concept
-
-Instead of loading an entire model into VRAM at once, N730 streams quantized transformer layers dynamically during inference, allowing models far larger than the GPU's memory capacity to run on legacy hardware.
-
----
-
-## Supported Quantization
-
-| Format | Status |
-|---|---|
-| FP16 | Working |
-| INT8 | Working |
-| INT4 | Experimental |
-| INT2 | Experimental / cursed |
-
-## Hardware Tested
-
-| GPU | Status |
-|---|---|
-| GT 730 2GB DDR3 | Working |
-| GTX 1650 | Untested |
-| RTX Series | Needs re-done compiler with different instruction set |
-
----
+Setup and usage instructions coming soon after this gets to a almost working state.
 
 ## License
 

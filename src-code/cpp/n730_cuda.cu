@@ -7,7 +7,6 @@
  *   nvcc -O3 -arch=sm_35 --shared -lcublas \
  *        -o n730_cuda.dll n730_cuda.cu
  *
- * Internal usage only.
  *
  * Minimum CUDA version(IDK why the fuck you would use this but whatever bruh): 9.0 (last version supporting sm_35)
  * Recommended CUDA version: 11.4 (for least pain)
@@ -31,9 +30,6 @@
   #define N730_API extern "C" __attribute__((visibility("default")))
 #endif
  
- 
-// ─── Error handling ───────────────────────────────────────────────────────────
- 
 #define CUDA_CHECK(x) do { \
     cudaError_t e = (x); \
     if (e != cudaSuccess) { \
@@ -54,11 +50,7 @@
 static const int N730_OK       =  0;
 static const int N730_CUDA_ERR = -10;
 static const int N730_OOM      = -11;
-static const int N730_NULL     = -12;
- 
- 
-// ─── GPU context ─────────────────────────────────────────────────────────────
- 
+static const int N730_NULL     = -12; 
 struct N730CudaCtx {
     cublasHandle_t cublas;
  
@@ -83,26 +75,13 @@ struct N730CudaCtx {
     int num_heads;
     int head_dim;
     int vocab_size;
- 
-    // Staging: pinned host memory for fast DMA
     float*   h_weights_pinned;   // pinned host buffer for weight transfers
     uint8_t* h_quant_pinned;     // pinned host buffer for raw quantized bytes
     int      pinned_bytes;
-
-    // Dedicated device staging buffer for raw quantized bytes during upload.
-    // Sized to hold the raw bytes of the largest INT4 layer (max_weight_elements/2).
-    // Kept separate from d_norm_buf so weight uploads never clobber active data.
     uint8_t* d_quant_staging;
     int      quant_staging_bytes;
 };
- 
- 
-// ─── Dequantization kernels — run on GPU ─────────────────────────────────────
- 
-/*
- * INT4 dequant: each byte holds two 4-bit values (lo nibble, hi nibble).
- * Launch with n_elements/2 threads (each thread handles one byte = 2 values).
- */
+
 __global__ void dequant_int4_kernel(
     const uint8_t* __restrict__ src,
     float*         __restrict__ dst,
@@ -124,10 +103,6 @@ __global__ void dequant_int4_kernel(
     if (out1 < n_elements) dst[out1] = hi;
 }
  
-/*
- * INT8 dequant: one thread per element.
- * Simplest kernel — compiler will vectorize loads.
- */
 __global__ void dequant_int8_kernel(
     const uint8_t* __restrict__ src,
     float*         __restrict__ dst,
@@ -188,10 +163,6 @@ __global__ void rmsnorm_kernel(
         xrow[i] = xrow[i] * rms_inv * w[i];
 }
  
-/*
- * SiLU activation: silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
- * Applied element-wise to gate projection output.
- */
 __global__ void silu_kernel(
     float* __restrict__ gate,    // modified in place
     int    n_elements
@@ -201,10 +172,7 @@ __global__ void silu_kernel(
     float x = gate[i];
     gate[i] = x / (1.0f + expf(-x));
 }
- 
-/*
- * Elementwise multiply: gate *= up (SwiGLU merge step)
- */
+
 __global__ void elemwise_mul_kernel(
     float*       __restrict__ gate,  // modified in place: gate = gate * up
     const float* __restrict__ up,
@@ -239,12 +207,7 @@ __global__ void add_bias_kernel(
     if (i >= n) return;
     x[i] += bias[i % dim];
 }
- 
-/*
- * Softmax over last dimension.
- * One block per (head * query) row, seq_total columns.
- * Uses proper multi-warp reduction via shared memory.
- */
+
 __global__ void softmax_kernel(
     float* __restrict__ scores,   // (n_rows, seq) modified in place
     int    n_rows,
@@ -301,11 +264,7 @@ __global__ void softmax_kernel(
     for (int i = threadIdx.x; i < seq; i += blockDim.x)
         s[i] /= sum;
 }
- 
-/*
- * Causal mask: set scores[q, k] = -1e4 where k > q + offset
- * (offset = number of previously cached tokens)
- */
+
 __global__ void causal_mask_kernel(
     float* __restrict__ scores,  // (n_heads, seq_q, seq_total)
     int    n_heads,
@@ -408,8 +367,6 @@ __global__ void unpack_attn_kernel(
 
     dst[dst_idx] = src[src_idx];
 }
- 
-// ─── Public API ──────────────────────────────────────────────────────────────
  
 N730_API int n730_cuda_init(
     int hidden_size,
@@ -574,12 +531,7 @@ N730_API int n730_upload_norm_weight(
 N730_API void n730_free_device_buf(void* ptr) {
     if (ptr) cudaFree(ptr);
 }
- 
-/*
- * n730_rmsnorm_inplace
- * Apply RMSNorm to d_activations using a device-side norm weight vector.
- * Result written to d_norm_buf (leaves d_activations unchanged for residual).
- */
+
 N730_API int n730_rmsnorm(
     void*        ctx_ptr,
     const float* d_norm_w,   // device pointer to norm weights
@@ -634,11 +586,7 @@ N730_API int n730_linear(
 
     return N730_OK;
 }
- 
-/*
- * n730_residual_add
- * x += delta — adds sub-result back to residual stream.
- */
+
 N730_API int n730_residual_add(
     void*        ctx_ptr,
     const float* d_delta,
@@ -653,12 +601,6 @@ N730_API int n730_residual_add(
     return N730_OK;
 }
  
-/*
- * n730_add_bias
- * out[s, :] += bias for every row s. bias is a device pointer already
- * uploaded (e.g. via n730_upload_norm_weight, which is a generic
- * host->device float-vector upload despite the name).
- */
 N730_API int n730_add_bias(
     void*        ctx_ptr,
     float*       d_out,
@@ -674,12 +616,6 @@ N730_API int n730_add_bias(
     return N730_OK;
 }
 
-/*
- * n730_swiglu
- * SwiGLU activation: gate = silu(gate) * up
- * gate and up are both (seq, intermediate_size) in device memory.
- * Result stored in gate buffer.
- */
 N730_API int n730_swiglu(
     float* d_gate,
     float* d_up,
@@ -694,10 +630,6 @@ N730_API int n730_swiglu(
     return N730_OK;
 }
  
-/*
- * n730_apply_rope
- * Apply rotary embeddings to Q or K tensor already in device memory.
- */
 N730_API int n730_apply_rope(
     float*       d_x,         // (seq, n_heads, head_dim) device
     const float* d_cos,       // (max_seq, head_dim/2) device
@@ -715,11 +647,7 @@ N730_API int n730_apply_rope(
     CUDA_CHECK(cudaGetLastError());
     return N730_OK;
 }
- 
-/*
- * n730_rope_precompute
- * Build cos/sin tables on device. Called once at model init.
- */
+
 N730_API int n730_rope_precompute(
     int    max_seq,
     int    head_dim,
@@ -756,12 +684,7 @@ N730_API int n730_rope_precompute(
     *d_sin_out = d_sin;
     return N730_OK;
 }
- 
-/*
- * n730_softmax_scores
- * Apply causal mask + softmax to attention score matrix.
- * scores: (n_heads, seq_q, seq_total) device memory
- */
+
 N730_API int n730_softmax_scores(
     float* d_scores,
     int    n_heads,
@@ -858,9 +781,6 @@ N730_API int n730_attention_forward(
 
         CUBLAS_CHECK(cublasSgemm(
             ctx->cublas,
-            // K_h/Q_h are row-major (sequence, head_dim).  cuBLAS sees
-            // their storage as (head_dim, sequence), so compute
-            // K * Q^T (the column-major representation of Q * K^T).
             CUBLAS_OP_T,
             CUBLAS_OP_N,
             seq_total, seq_q, head_dim,     // m, n, k
@@ -917,9 +837,6 @@ N730_API int n730_attention_forward(
         ));
     }
 
-    // Unpack ctx->d_attn_out (head, seq, dim) → d_out (seq, head, dim).
-    // These are guaranteed distinct: ctx->d_attn_out is internal scratch,
-    // d_out is the caller's buffer.
     dim3 unpack_blocks(seq_q, n_heads);
     int unpack_threads = min(head_dim, 256);
 
@@ -932,7 +849,6 @@ N730_API int n730_attention_forward(
     );
 
     CUDA_CHECK(cudaGetLastError());
-    // No memcpy needed — d_out was written directly by unpack_attn_kernel.
 
     return N730_OK;
 }
@@ -1077,5 +993,5 @@ N730_API int n730_sync() {
 }
  
 N730_API const char* n730_cuda_version() {
-    return "N730 CUDA Kernel v-smth / sm_35";
+    return "N730 CUDA Kernel version whatever/ sm_35";
 }
