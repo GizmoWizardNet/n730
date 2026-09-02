@@ -1,0 +1,6 @@
+__pycache__
+*.n730
+*.dll
+*.exp
+*.lib
+*.obj
