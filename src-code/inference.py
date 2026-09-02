@@ -363,7 +363,30 @@ class N730CudaTransformer:
         self._model_path = model_path
         # Cache for embed/lm_head (CPU side only — these are looked up by name not index)
         self._float_cache: Dict[str, np.ndarray] = {}
+        self._validate_model_layout()
         print(f"  Weight index built ({len(self._seek_table)} layers)")
+
+    def _validate_model_layout(self):
+        """Reject incomplete/incompatible files before stale GPU buffers can be used."""
+        cfg = self.cfg
+        required = ["model.embed_tokens.weight"]
+        for i in range(cfg.num_hidden_layers):
+            pfx = f"model.layers.{i}"
+            required.extend([
+                f"{pfx}.self_attn.q_proj.weight",
+                f"{pfx}.self_attn.k_proj.weight",
+                f"{pfx}.self_attn.v_proj.weight",
+                f"{pfx}.self_attn.o_proj.weight",
+                f"{pfx}.mlp.gate_proj.weight",
+                f"{pfx}.mlp.up_proj.weight",
+                f"{pfx}.mlp.down_proj.weight",
+            ])
+        missing = [name for name in required if name not in self._name_to_entry]
+        if missing:
+            preview = ", ".join(missing[:4])
+            suffix = " ..." if len(missing) > 4 else ""
+            raise ValueError(f"Model file is missing {len(missing)} required tensors: "
+                             f"{preview}{suffix}")
 
     def _get_raw_weight(self, name: str):
         """Read raw quantized bytes for a layer directly from .n730 file."""
@@ -488,8 +511,15 @@ class N730CudaTransformer:
 
     def forward(self, token_ids: np.ndarray) -> np.ndarray:
         cfg    = self.cfg
+        token_ids = np.asarray(token_ids, dtype=np.int32)
         seq    = len(token_ids)
         offset = self.kv.seq_len
+
+        if seq == 0:
+            raise ValueError("forward requires at least one token")
+        if offset + seq > self.kv.max_seq:
+            raise ValueError(f"KV cache capacity exceeded: {offset + seq} tokens "
+                             f"requested, maximum is {self.kv.max_seq}")
 
         # ── Embed: CPU lookup → upload to VRAM ────────────────────────────
         embed_w = self._get_float_weight("model.embed_tokens.weight")
@@ -591,6 +621,9 @@ class N730CudaTransformer:
                     cfg.hidden_size,        # in_dim  = n_heads * head_dim = hidden
                     cfg.hidden_size,        # out_dim = hidden
                 ), "o_proj")
+                self._add_bias_if_present(
+                    f"{pfx}.self_attn.o_proj.weight", self.d_mlp_out.fp(),
+                    seq, cfg.hidden_size)
                 # Residual: d_activations += d_mlp_out (o_proj result)
                 check(self.lib.n730_residual_add(
                     self.ctx, self.d_mlp_out.ptr, seq,
@@ -615,6 +648,9 @@ class N730CudaTransformer:
                     self.ctx, self.d_gate.ptr, seq,
                     cfg.hidden_size, cfg.intermediate_size,
                 ), "gate_proj")
+                self._add_bias_if_present(
+                    f"{pfx}.mlp.gate_proj.weight", self.d_gate.fp(),
+                    seq, cfg.intermediate_size)
 
             # Up projection: d_norm_buf → d_up
             if self._upload_layer_weight(f"{pfx}.mlp.up_proj.weight"):
@@ -622,6 +658,9 @@ class N730CudaTransformer:
                     self.ctx, self.d_up.ptr, seq,
                     cfg.hidden_size, cfg.intermediate_size,
                 ), "up_proj")
+                self._add_bias_if_present(
+                    f"{pfx}.mlp.up_proj.weight", self.d_up.fp(),
+                    seq, cfg.intermediate_size)
 
             # SwiGLU: d_gate = silu(d_gate) * d_up  — stays on GPU
             check(self.lib.n730_swiglu(
@@ -640,6 +679,9 @@ class N730CudaTransformer:
                     cfg.intermediate_size,  # in_dim
                     cfg.hidden_size,        # out_dim
                 ), "down_proj")
+                self._add_bias_if_present(
+                    f"{pfx}.mlp.down_proj.weight", self.d_attn_out.fp(),
+                    seq, cfg.hidden_size)
                 # Residual: d_activations += d_attn_out (down_proj result)
                 check(self.lib.n730_residual_add(
                     self.ctx, self.d_attn_out.ptr, seq,
@@ -663,9 +705,13 @@ class N730CudaTransformer:
 
         # LM head
         lmh = self._get_float_weight("lm_head.weight")
+        # Most Llama-family checkpoints tie the output embedding to
+        # model.embed_tokens.weight, so named_parameters() stores it once.
+        if lmh is None:
+            lmh = embed_w
         if lmh is not None:
             return last @ lmh.T
-        return last
+        raise ValueError("Model has neither lm_head.weight nor model.embed_tokens.weight")
 
 
 # ─── Sampling ─────────────────────────────────────────────────────────────────
