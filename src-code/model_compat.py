@@ -1,20 +1,3 @@
-"""
-model_compat.py — one source of truth for "will N730 actually work on this
-HF model", used by converter.py, inference.py, diagnose_cancer.py, and
-setup.py so they can never silently disagree with each other.
-
-N730's CUDA kernels hardcode a specific block shape:
-    RMSNorm -> GQA self-attention (rotate_half RoPE) -> RMSNorm -> SwiGLU MLP
-That shape is shared by the "Llama family" (Llama 2/3, Mistral, Qwen2/2.5,
-StableLM 2, SmolLM/SmolLM2, Yi, and most fine-tunes of those). It is NOT
-shared by GPT-2/Falcon (LayerNorm + learned-abs-pos + fused qkv), Phi
-(partial rotary), Gemma (GeGLU + extra norms + soft-capping), Mixtral
-(MoE routing), or anything using ALiBi.
-
-Rather than silently feeding an incompatible model through the pipeline and
-producing confident-looking garbage, every entry point calls check() first
-and refuses (or warns) with a specific, actionable reason.
-"""
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
@@ -26,8 +9,6 @@ SUPPORTED_ARCHITECTURES = {
     "StableLmForCausalLM",
 }
 
-# architectures whose config.json satisfies SUPPORTED_ARCHITECTURES on paper
-# but which are known to break one of N730's hardcoded assumptions anyway.
 KNOWN_INCOMPATIBLE_NOTES = {
     "MixtralForCausalLM": "uses MoE routing (num_local_experts) — N730 has no router/expert-dispatch kernel.",
     "Phi3ForCausalLM": "uses partial_rotary_factor + fused qkv_proj — different attention layout.",
