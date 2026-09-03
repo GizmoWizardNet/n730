@@ -12,7 +12,7 @@ Each LAYER_DATA block:
   [SCALE f32][ZERO_POINT f32][DATA_SIZE 4b][QUANTIZED_BYTES ...]
 
 Usage:
-    python converter.py --model deepseek-ai/deepseek-r1-distill-qwen-1.5b \\
+    python converter.py --model hf-model-id \\
                         --sensitivity sensitivity_map.json \\
                         --output model.n730
 

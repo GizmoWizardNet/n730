@@ -1,13 +1,4 @@
 /*
- * Build:
- *   nvcc -O3 -arch=sm_35 -shared -Xcompiler -fPIC \
- *        -lcublas -o n730_cuda.so n730_cuda.cu
- *
- *   Windows (x64 Developer Prompt):
- *   nvcc -O3 -arch=sm_35 --shared -lcublas \
- *        -o n730_cuda.dll n730_cuda.cu
- *
- *
  * Minimum CUDA version(IDK why the fuck you would use this but whatever bruh): 9.0 (last version supporting sm_35)
  * Recommended CUDA version: 11.4 (for least pain)
  *

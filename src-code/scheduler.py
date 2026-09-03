@@ -1,15 +1,4 @@
 """
-N730 Scheduler (C++ accelerated now vroom vroom)
-==================================
-
-Architecture:
-    Python (this file)          C++ (n730core.dll/.so)
-    ─────────────────────       ──────────────────────────
-    Seek table management   →   n730_open()  / n730_close()
-    Prefetch thread logic   →   n730_read_layer()  ← THE HOT PATH
-    Pipeline / queuing      →   n730_layer_elements()
-    Stats / reporting           dequant_int2/4/8/fp16()
-
 Usage:
     python scheduler_cpp.py --model deepseek-r1-1.5b.n730 --benchmark
     python scheduler_cpp.py --model deepseek-r1-1.5b.n730 --layer 42

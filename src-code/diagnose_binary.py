@@ -1,3 +1,7 @@
+"""
+diagnostic script for the .n730 model binary
+"""
+
 import argparse, ctypes, math, os, struct, sys
 import numpy as np
 from pathlib import Path

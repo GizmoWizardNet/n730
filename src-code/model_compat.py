@@ -1,3 +1,7 @@
+"""
+Compatibility checker for Llama, Qwen2, Mistral, StableLM
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional

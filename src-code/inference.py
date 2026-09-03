@@ -1,7 +1,7 @@
 """
 Usage:
-  python inference.py --model deepseek-r1-1.5b.n730 \
-    --hf-model path/to/model --interactive
+  python inference.py --model model_file.n730 \
+    --hf-model hf-model-id --interactive
 """
 import os
 if os.name == "nt":

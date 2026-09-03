@@ -1,11 +1,3 @@
-/*
- * Build (Windows, MSVC):
- *   cl /O2 /arch:AVX2 /LD n730core.cpp /Fe:n730core.dll
- *
- * Build (Windows, MinGW/g++):
- *   g++ -O3 -march=native -shared -o n730core.dll n730core.cpp
- */
-
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
