@@ -182,6 +182,18 @@ class ModelConfig:
                           f"model doesn't match those shapes.")
             if c is not None:
                 self._apply(c)
+                try:
+                    import model_compat
+                    compat = model_compat.check(c)
+                    if not compat.ok:
+                        print(f"  WARNING: {compat.architecture} is not a supported "
+                              f"architecture — output is likely garbage:")
+                        for r in compat.reasons:
+                            print(f"    ✗ {r}")
+                    for w in compat.warnings:
+                        print(f"  NOTE: {w}")
+                except Exception:
+                    pass  # compat check is best-effort, never block inference on it
 
     def _apply(self, c):
         self.hidden_size         = c.get("hidden_size",             self.hidden_size)
