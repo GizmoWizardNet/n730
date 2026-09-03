@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Pick a compatible HuggingFace model, point HF_HOME at the bundled hf-cache
-folder, then walk through profiling -> conversion -> interactive inference,
-all from one menu.
-
+Official n730 setup script
 Run it with:  python setup.py
 """
 
@@ -16,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 
@@ -36,24 +34,39 @@ CUDA_LIB   = CPP_DIR / ("n730_cuda.dll" if IS_WINDOWS else "n730_cuda.so")
 
 COMPATIBLE_MODELS = [
     {
-        "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-        "label": "DeepSeek-R1-Distill-Qwen 1.5B",
-        "note": "Default / best-tested target. ~3.5GB FP32 download.",
-    },
-    {
         "id": "Qwen/Qwen2.5-0.5B-Instruct",
         "label": "Qwen2.5 0.5B Instruct",
         "note": "Smallest, fastest to profile+convert. Good for a first run.",
     },
     {
+        "id": "HuggingFaceTB/SmolLM2-360M-Instruct",
+        "label": "SmolLM2 360M Instruct",
+        "note": "Tiny Llama-family model, no attention bias, tied embeddings.",
+    },
+    {
         "id": "Qwen/Qwen2.5-1.5B-Instruct",
         "label": "Qwen2.5 1.5B Instruct",
-        "note": "Same size class as the DeepSeek distill above.",
+        "note": "Good balance of quality vs conversion/profile time.",
     },
     {
         "id": "Qwen/Qwen2-1.5B-Instruct",
         "label": "Qwen2 1.5B Instruct",
         "note": "Older Qwen2 generation, same architecture family.",
+    },
+    {
+        "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+        "label": "DeepSeek-R1-Distill-Qwen 1.5B",
+        "note": "Reasoning-tuned distill on the Qwen2 architecture. ~3.5GB FP32 download.",
+    },
+    {
+        "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        "label": "TinyLlama 1.1B Chat",
+        "note": "Genuine Llama architecture (not Qwen-family) — good cross-family sanity check.",
+    },
+    {
+        "id": "stabilityai/stablelm-2-1_6b-chat",
+        "label": "StableLM 2 1.6B Chat",
+        "note": "Third distinct architecture in the supported family.",
     },
     {
         "id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
@@ -211,7 +224,7 @@ def save_state(state):
 
 def choose_model(state):
     options = [(m["label"], f"{m['id']} — {m['note']}") for m in COMPATIBLE_MODELS]
-    options.append(("Enter a custom HuggingFace repo id", "Must follow the Qwen2-style GQA + SwiGLU + RMSNorm layout"))
+    options.append(("Enter a custom HuggingFace repo id", "Checked live against N730's supported architecture list"))
 
     idx = prompt_choice("Select a HuggingFace model", options)
     if idx is None:
@@ -220,11 +233,52 @@ def choose_model(state):
         repo_id = prompt_text("HuggingFace repo id (e.g. org/model-name)")
         if not repo_id:
             return None
+        if not check_model_compat(repo_id):
+            return None
+        state["last_model"] = repo_id
+        save_state(state)
         return repo_id
     model_id = COMPATIBLE_MODELS[idx]["id"]
     state["last_model"] = model_id
     save_state(state)
     return model_id
+
+def check_model_compat(repo_id: str) -> bool:
+    """Live compatibility check via model_compat.py. Returns True if the
+    user should proceed (compatible, or explicitly overrode a warning)."""
+    sys.path.insert(0, str(SRC))
+    try:
+        import model_compat
+    except ImportError:
+        warn("model_compat.py not found — skipping compatibility check.")
+        return True
+    finally:
+        sys.path.pop(0)
+
+    info(f"Checking {repo_id} against N730's supported architecture list...")
+    try:
+        result = model_compat.check_repo(repo_id)
+    except Exception as e:
+        warn(f"Could not fetch config.json to check compatibility: {e}")
+        return prompt_yesno("Proceed anyway?", default=False)
+
+    print(f"\n  {C.BOLD}architecture:{C.RESET} {result.architecture}")
+    if result.ok:
+        ok("Compatible — RMSNorm + GQA + rotate_half RoPE + SwiGLU, matches N730's kernels.")
+    else:
+        err("NOT compatible with N730's hardcoded kernel assumptions:")
+        for r in result.reasons:
+            print(f"    {C.RED}✗{C.RESET} {r}")
+    for w in result.warnings:
+        print(f"    {C.YELLOW}⚠{C.RESET} {w}")
+    print()
+
+    if result.ok:
+        return True
+    return prompt_yesno(
+        "Proceed anyway? (conversion will likely produce garbage output)",
+        default=False,
+    )
 
 
 def slug(model_id: str) -> str:
@@ -239,7 +293,10 @@ def slug(model_id: str) -> str:
 
 def run(cmd, cwd=None):
     info(f"$ {' '.join(str(c) for c in cmd)}")
-    return subprocess.call(cmd, cwd=cwd or SRC)
+    start = time.time()
+    rc = subprocess.call(cmd, cwd=cwd or SRC)
+    info(f"({time.time() - start:.1f}s)")
+    return rc
 
 
 def stage_profile(model_id: str) -> Path | None:
@@ -426,6 +483,28 @@ def action_inspect_n730(state):
 #  Main menu
 # ─────────────────────────────────────────────────────────────────────────
 
+def startup_diagnostic():
+    """Quiet one-shot readiness check, printed once at launch — not the full
+    'Check environment' menu action (which is interactive and installs
+    things). This just tells you where you stand before you pick anything."""
+    missing = check_python_packages()
+    core_ok, cuda_ok = check_cuda_core()
+
+    if not missing and core_ok and cuda_ok:
+        ok("Environment ready: packages OK, C++ core built, CUDA kernels built.")
+        return
+
+    if missing:
+        warn(f"Missing Python packages: {', '.join(missing)} "
+             f"(menu option 6 can install these)")
+    if not core_ok:
+        warn(f"C++ scheduler core not built: {CORE_LIB.name} "
+             f"(menu option 6 shows the build command)")
+    if not cuda_ok:
+        warn(f"CUDA kernels not built: {CUDA_LIB.name} "
+             f"(menu option 6 shows the build command)")
+
+
 def main():
     if sys.version_info < (3, 9):
         print("N730 setup requires Python 3.9+.")
@@ -433,6 +512,11 @@ def main():
 
     state = load_state()
     hf_home = setup_hf_home()
+
+    clear()
+    banner()
+    startup_diagnostic()
+    pause()
 
     while True:
         clear()
