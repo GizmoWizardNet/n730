@@ -24,6 +24,7 @@ import argparse
 import json
 import math
 import struct
+import sys
 import time
 import numpy as np
 from pathlib import Path
@@ -398,6 +399,8 @@ def main():
     parser.add_argument("--inspect", type=str, help="Inspect an existing .n730 file and exit")
     parser.add_argument("--read-layer", type=int, help="Read and dequantize a specific layer index (requires --inspect)")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--force-incompatible", action="store_true",
+                         help="Convert anyway even if model_compat.py flags the architecture as unsupported")
     args = parser.parse_args()
 
     print("\n╔══════════════════════════════════════╗")
@@ -425,6 +428,23 @@ def main():
         weight_layers = generate_synthetic_weights(sensitivity_map)
     elif args.model:
         print(f"\n  Mode: REAL MODEL ({args.model})")
+        try:
+            import model_compat
+            compat = model_compat.check_repo(args.model)
+        except Exception as e:
+            compat = None
+            print(f"  (compat check skipped: {e})")
+        if compat is not None:
+            print("\n  " + compat.describe().replace("\n", "\n  "))
+            if not compat.ok:
+                print(
+                    "\n  Refusing to convert: this architecture doesn't match what "
+                    "N730's kernels assume (RMSNorm + GQA + rotate_half RoPE + SwiGLU).\n"
+                    "  Converting anyway would produce a .n730 file that loads but "
+                    "generates garbage. Pass --force-incompatible to override."
+                )
+                if not getattr(args, "force_incompatible", False):
+                    sys.exit(1)
         from transformers import AutoModelForCausalLM
         import torch
         model = AutoModelForCausalLM.from_pretrained(
