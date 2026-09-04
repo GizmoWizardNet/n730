@@ -2,7 +2,7 @@
 
 To compile and use this project with a **compatible** LLM.
 
-### 🚧 MAKE SURE THAT YOU HAVE A CUDA-COMPATIBLE NVIDIA GPU! ⚠️
+### MAKE SURE THAT YOU HAVE A CUDA-COMPATIBLE NVIDIA GPU!
 
 Of course, this is specifically designed with the **GT 730, Kepler-era 2GB VRAM card**. Support for other GPUs is *not required* but are welcome as additions to the project.
 
